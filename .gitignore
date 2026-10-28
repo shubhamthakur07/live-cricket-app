@@ -27,3 +27,11 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Python Microservice
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+score-engine/venv/
+score-engine/__pycache__/

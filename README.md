@@ -1,58 +1,107 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 🏏 Live Cricket Hub & CricHeroes Social App
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A modern full-stack cricket web application featuring **live ball-by-ball Cricbuzz match tracking**, **CricHeroes-style match & squad management**, **WhatsApp player lookup**, and an **Instagram-style cricket community feed**.
 
-## About Laravel
+Built with **Laravel 11**, **MySQL / phpMyAdmin**, **Tailwind CSS**, **Alpine.js**, and a dedicated **Python FastAPI live scoring microservice**.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## 🌟 Key Features
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### 1. ⚡ Live Scores & Cricbuzz Engine
+- Real-time live scorecards, match summaries, and ball-by-ball commentary.
+- Top match story bubbles for active international & domestic matches.
+- Automated match updates via local high-speed Python scraper microservice.
 
-## Learning Laravel
+### 2. 📱 CricHeroes-Style Match & Squad Management
+- **Start / Edit Matches:** Create tournament, series, overs, leather/tennis ball types, and match venues.
+- **WhatsApp Player Lookup:** Enter player phone numbers to auto-fetch career statistics and link playing profiles.
+- **Playing XI Squad Builder:** Add batsmen, bowlers, designate Captain (C) and Wicketkeeper (WK).
+- **Match Center:** Categorized by Live, Scheduled, Completed, and Abandoned.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+### 3. 📸 Instagram-Style Cricket Feed & Community
+- Post match updates, memes, news, and match discussions.
+- Heart likes, comment threads, and instant post sharing.
+- Follow / Unfollow cricket fans and players.
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+### 4. 👤 Cricket Career Passport (User Profile)
+- Detailed player career cards: Matches played, Total runs, Strike rate, Highest score, Batting average, Wickets taken, Best bowling figures, and Economy rate.
+- Bio, phone number, and customizable profile avatars.
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+---
 
-## Agentic Development
+## 🏗️ Architecture
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+```text
+live-cricket-app/
+├── app/                  # Laravel 11 Backend (Controllers, Models, Services)
+├── resources/views/      # Blade Frontend UI (Tailwind CSS, Alpine.js)
+├── routes/               # Web & API routes
+├── database/             # Migrations & database schemas (MySQL / SQLite)
+└── score-engine/         # Python FastAPI Live Scoring Microservice (Port 6020)
+    ├── app.py            # Cricbuzz scraper & real-time REST API
+    ├── requirements.txt  # Python dependencies
+    └── run.py            # Microservice runner
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+---
 
-## Contributing
+## 🚀 Getting Started
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### Prerequisites
+- PHP >= 8.2 & Composer
+- Node.js >= 18 & npm
+- Python >= 3.10
+- MySQL Server / MariaDB (or SQLite)
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+### Step 1: Backend & Frontend Setup (Laravel)
 
-## Security Vulnerabilities
+```bash
+# 1. Clone repository
+git clone https://github.com/<your-username>/live-cricket-app.git
+cd live-cricket-app
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+# 2. Install PHP dependencies
+composer install
 
-## License
+# 3. Setup environment file
+cp .env.example .env
+php artisan key:generate
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+# 4. Configure your database in .env and run migrations
+php artisan migrate
+
+# 5. Install frontend assets and build
+npm install
+npm run build
+
+# 6. Start Laravel server
+php artisan serve --port=8001
+```
+
+---
+
+### Step 2: Live Score Engine Setup (Python Microservice)
+
+```bash
+cd score-engine
+
+# 1. Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+
+# 3. Start Python Live Score Service on Port 6020
+uvicorn app:app --host 127.0.0.1 --port 6020 --reload
+```
+
+Now open **`http://localhost:8001`** in your browser! 🏏
+
+---
+
+## 📄 License
+This project is open-source and available under the [MIT License](LICENSE).
