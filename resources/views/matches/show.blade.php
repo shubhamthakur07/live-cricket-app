@@ -74,13 +74,22 @@
 
     $defaultNextBatterId = $availableNextBatsmen->first()?->id ?? '';
 
-    $currentBowlerId = $state['bowler_id'] ?? ($bowler?->id ?? null);
     $bowlingSquad = $activeInningNum == 1 ? $match->team2Players : $match->team1Players;
+
+    // Ensure bowler belongs to the bowling squad of this match
+    if (!$bowler || !$bowlingSquad->contains('id', $bowler->id)) {
+        $bowler = $bowlingSquad->first(function($p) {
+            $role = strtolower((string)$p->player_role);
+            return str_contains($role, 'bowler') || str_contains($role, 'all-rounder');
+        }) ?? $bowlingSquad->first();
+    }
+
+    $currentBowlerId = $bowler?->id;
     $availableBowlers = $bowlingSquad->filter(function($b) use ($currentBowlerId, $bowlingSquad) {
         if ($bowlingSquad->count() > 1 && $b->id == $currentBowlerId) return false;
         return true;
     })->values();
-    $defaultNewBowlerId = $availableBowlers->first()?->id ?? '';
+    $defaultNewBowlerId = $availableBowlers->first()?->id ?? ($bowlingSquad->first()?->id ?? '');
 @endphp
 
 <div class="py-8 bg-slate-900 min-h-screen text-slate-100 font-sans" x-data="{
@@ -108,6 +117,7 @@
     wicketHowOut: 'bowled',
     wicketNextBatterId: '{{ $defaultNextBatterId }}',
     bowlerModalOpen: {{ !empty($state['needs_new_bowler']) ? 'true' : 'false' }},
+    needsNewBowler: {{ !empty($state['needs_new_bowler']) ? 'true' : 'false' }},
     newBowlerId: '{{ $defaultNewBowlerId }}',
     openersModalOpen: false,
     selectStrikerId: '{{ $state['striker_id'] ?? '' }}',
@@ -116,6 +126,29 @@
 
     // CricHeroes Ball-By-Ball Action Dispatcher
     async recordBallAction(action, payload = {}) {
+        // Exclude setup/meta actions from active bowler and batsman requirement
+        const isSetupAction = ['select_bowler', 'select_openers', 'undo'].includes(action);
+
+        if (!isSetupAction) {
+            // 1. Strict Bowler Check
+            if (!this.liveBowler || !this.liveBowler.id) {
+                this.showToast('⚠️ Pehle Bowler select karein!');
+                this.bowlerModalOpen = true;
+                return;
+            }
+            if (this.needsNewBowler) {
+                this.showToast('⚠️ Over pura ho gaya hai! Agle over ke liye Bowler select karein.');
+                this.bowlerModalOpen = true;
+                return;
+            }
+            // 2. Strict Batsmen Check
+            if (!this.liveStriker || !this.liveStriker.id || !this.liveNonStriker || !this.liveNonStriker.id) {
+                this.showToast('⚠️ Pehle Striker aur Non-Striker select karein!');
+                this.openersModalOpen = true;
+                return;
+            }
+        }
+
         if (this.isProcessingBall) return;
         this.isProcessingBall = true;
         try {
@@ -142,6 +175,10 @@
                     this.scoreOvers = data.score.overs;
                 }
 
+                if (action === 'select_bowler') {
+                    this.needsNewBowler = false;
+                }
+
                 // If wicket was taken and next batsman not yet selected, open wicket modal
                 if (data.wicket && !payload.next_batsman_id) {
                     this.wicketModalOpen = true;
@@ -149,6 +186,7 @@
 
                 // If over completed, prompt next bowler
                 if (data.over_completed) {
+                    this.needsNewBowler = true;
                     this.bowlerModalOpen = true;
                 }
 
@@ -156,6 +194,13 @@
                 setTimeout(() => { window.location.reload(); }, 600);
             } else {
                 this.showToast(data.message || 'Error recording ball');
+                if (data.needs_new_bowler) {
+                    this.needsNewBowler = true;
+                    this.bowlerModalOpen = true;
+                }
+                if (data.needs_openers) {
+                    this.openersModalOpen = true;
+                }
             }
         } catch(e) {
             console.error(e);
@@ -487,18 +532,22 @@
                     </div>
 
                     <!-- Active Bowler -->
-                    <div class="p-4 rounded-2xl bg-slate-900 border border-rose-500/30 shadow-lg relative">
+                    <div class="p-4 rounded-2xl shadow-lg relative transition"
+                         :class="(!liveBowler || !liveBowler.id || needsNewBowler) ? 'bg-amber-950/40 border-2 border-amber-500 shadow-amber-500/20 animate-pulse' : 'bg-slate-900 border border-rose-500/30'">
                         <div class="flex items-center justify-between text-[11px] mb-1">
-                            <span class="px-2 py-0.5 rounded-md bg-rose-600 text-white font-black uppercase text-[9px] flex items-center gap-1 shadow-sm">
+                            <span class="px-2 py-0.5 rounded-md text-white font-black uppercase text-[9px] flex items-center gap-1 shadow-sm"
+                                  :class="(!liveBowler || !liveBowler.id || needsNewBowler) ? 'bg-amber-600' : 'bg-rose-600'">
                                 <span>🎯 BOWLER</span>
                             </span>
                             <button type="button" @click="bowlerModalOpen = true" 
-                                    class="px-2 py-0.5 rounded bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 text-[10px] font-bold transition">
-                                Change Bowler 🔄
+                                    class="px-2.5 py-1 rounded text-[10px] font-bold transition flex items-center gap-1"
+                                    :class="(!liveBowler || !liveBowler.id) ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'bg-rose-600/30 hover:bg-rose-600/50 text-rose-300'">
+                                <span x-text="(!liveBowler || !liveBowler.id) ? '+ Select Bowler ⚠️' : (needsNewBowler ? 'New Bowler 🎯' : 'Change 🔄')"></span>
                             </button>
                         </div>
-                        <div class="font-black text-white text-base sm:text-lg truncate mt-1" 
-                             x-text="liveBowler ? liveBowler.player_name : 'Select Bowler'"></div>
+                        <div class="font-black text-white text-base sm:text-lg truncate mt-1 cursor-pointer" 
+                             @click="(!liveBowler || !liveBowler.id || needsNewBowler) ? (bowlerModalOpen = true) : null"
+                             x-text="liveBowler ? liveBowler.player_name : '⚠️ Tap to Select Bowler'"></div>
                         <div class="mt-2 text-xs font-mono flex items-baseline justify-between">
                             <span class="text-xl font-black text-rose-400" 
                                   x-text="liveBowler ? (liveBowler.wickets_taken + '/' + liveBowler.runs_conceded) : '0/0'"></span>
@@ -544,6 +593,34 @@
 
                 <!-- CricHeroes Signature Scorer Touch Keypad -->
                 <div class="space-y-3">
+                    <!-- Missing Bowler Warning Banner -->
+                    <div x-cloak x-show="!liveBowler || !liveBowler.id" 
+                         @click="bowlerModalOpen = true"
+                         class="cursor-pointer p-3.5 rounded-2xl bg-gradient-to-r from-amber-600/30 to-rose-600/30 border-2 border-amber-500 text-amber-200 text-xs font-bold flex items-center justify-between hover:brightness-110 transition shadow-lg shadow-amber-500/20">
+                        <div class="flex items-center gap-2.5">
+                            <span class="text-xl animate-bounce">⚠️</span>
+                            <div>
+                                <div class="text-white font-black text-sm">Bowler Not Selected!</div>
+                                <div class="text-amber-300/80 text-[11px]">Bina bowler chune ball score nahi ki ja sakti. Yaha click karke bowler chunein.</div>
+                            </div>
+                        </div>
+                        <span class="px-3.5 py-1.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs shadow-md">Select Bowler 🎯</span>
+                    </div>
+
+                    <!-- Over Complete Bowler Banner -->
+                    <div x-cloak x-show="needsNewBowler" 
+                         @click="bowlerModalOpen = true"
+                         class="cursor-pointer p-3.5 rounded-2xl bg-gradient-to-r from-blue-600/30 to-indigo-600/30 border-2 border-blue-500 text-blue-200 text-xs font-bold flex items-center justify-between hover:brightness-110 transition shadow-lg shadow-blue-500/20">
+                        <div class="flex items-center gap-2.5">
+                            <span class="text-xl animate-bounce">🎯</span>
+                            <div>
+                                <div class="text-white font-black text-sm">Over Complete! Naya Bowler Chunein</div>
+                                <div class="text-blue-200/80 text-[11px]">Agle over ke liye bowling squad me se bowler select karein.</div>
+                            </div>
+                        </div>
+                        <span class="px-3.5 py-1.5 rounded-xl bg-blue-500 text-white font-black text-xs shadow-md">Choose Bowler 🎯</span>
+                    </div>
+
                     <div class="text-[11px] font-black uppercase text-slate-400 tracking-wider">
                         TAP TO RECORD BALL (AUTO ROTATES STRIKE & ADVANCES OVERS)
                     </div>

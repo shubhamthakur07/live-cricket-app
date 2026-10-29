@@ -225,13 +225,7 @@ class MatchController extends Controller
             'history' => [],
         ];
 
-        $battingTeamNumber = $state['batting_team_number'] ?? 1;
-        $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
-
-        $bowlingPlayers = $match->players()->where('team_number', $battingTeamNumber == 1 ? 2 : 1)->get();
-        if (empty($state['bowler_id']) && $bowlingPlayers->isNotEmpty()) {
-            $state['bowler_id'] = $bowlingPlayers->first()->id;
-        }
+        $this->ensureActiveMatchStateValid($state, $match);
 
         if ($state !== $match->live_state) {
             $match->update(['live_state' => $state]);
@@ -562,12 +556,24 @@ class MatchController extends Controller
 
         // Action: Select / Change Bowler
         if ($action === 'select_bowler') {
-            $state['bowler_id'] = (int) $request->input('bowler_id');
-            $state['this_over'] = [];
-            $state['needs_new_bowler'] = false;
+            $bowlerId = (int) $request->input('bowler_id');
+            $bowlingTeamNumber = ($state['batting_team_number'] ?? 1) == 1 ? 2 : 1;
+            $validBowler = $match->players()->where('team_number', $bowlingTeamNumber)->find($bowlerId);
+            if (!$validBowler) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Invalid bowler selected! Must be from the fielding team.'
+                ], 422);
+            }
+
+            $state['bowler_id'] = $bowlerId;
+            if (!empty($state['needs_new_bowler'])) {
+                $state['this_over'] = [];
+                $state['needs_new_bowler'] = false;
+            }
             $match->update(['live_state' => $state]);
 
-            return $this->cricHeroesResponse($match, 'New Bowler selected! 🎯');
+            return $this->cricHeroesResponse($match, "Bowler ready: {$validBowler->player_name}! 🎯");
         }
 
         // Action: Swap Strike (Batter Strike Rotation)
@@ -607,19 +613,39 @@ class MatchController extends Controller
             return $this->cricHeroesResponse($match, 'Nothing to undo.');
         }
 
-        // Auto-select openers if not selected yet
-        $battingPlayers = $match->players()->where('team_number', $battingTeamNumber)->get();
-        $bowlingPlayers = $match->players()->where('team_number', $battingTeamNumber == 1 ? 2 : 1)->get();
-
-        $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
-
-        if (empty($state['bowler_id']) && $bowlingPlayers->isNotEmpty()) {
-            $state['bowler_id'] = $bowlingPlayers->first()->id;
-        }
+        // Validate state before scoring
+        $this->ensureActiveMatchStateValid($state, $match);
 
         $striker = ($state['striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['striker_id']) : null;
         $nonStriker = ($state['non_striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['non_striker_id']) : null;
         $bowler = ($state['bowler_id'] ?? null) ? \App\Models\MatchPlayer::find($state['bowler_id']) : null;
+
+        // CRITICAL SCORING VALIDATION: Reject scoring if bowler or batsmen are not selected
+        if (!in_array($action, ['select_bowler', 'select_openers', 'undo'])) {
+            if (!$bowler || $bowler->match_id !== $match->id || $bowler->team_number == $battingTeamNumber) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => '⚠️ Pehle bowling team se Bowler select karein!',
+                    'needs_new_bowler' => true,
+                ], 422);
+            }
+
+            if (!empty($state['needs_new_bowler'])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => '⚠️ Over pura ho gaya hai! Agle over ke liye Bowler select karein.',
+                    'needs_new_bowler' => true,
+                ], 422);
+            }
+
+            if (!$striker || !$nonStriker || $striker->match_id !== $match->id || $nonStriker->match_id !== $match->id) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => '⚠️ Pehle Striker aur Non-Striker select karein!',
+                    'needs_openers' => true,
+                ], 422);
+            }
+        }
 
         $isLegalDelivery = false;
         $overBallText = '0';
@@ -658,7 +684,7 @@ class MatchController extends Controller
                 $tmp = $state['striker_id'];
                 $state['striker_id'] = $state['non_striker_id'];
                 $state['non_striker_id'] = $tmp;
-                $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
+                $this->ensureActiveMatchStateValid($state, $match);
             }
         } 
         // Wide or No Ball (Extras)
@@ -740,7 +766,7 @@ class MatchController extends Controller
             } else {
                 $state['striker_id'] = null;
             }
-            $this->ensureActiveBatsmenValid($state, $match, $score->inning_number);
+            $this->ensureActiveMatchStateValid($state, $match);
         }
 
         // Add to this_over delivery chips
@@ -759,7 +785,7 @@ class MatchController extends Controller
                 $state['striker_id'] = $state['non_striker_id'];
                 $state['non_striker_id'] = $tmp;
                 $state['needs_new_bowler'] = true;
-                $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
+                $this->ensureActiveMatchStateValid($state, $match);
             }
         }
 
@@ -772,10 +798,15 @@ class MatchController extends Controller
         );
     }
 
-    protected function ensureActiveBatsmenValid(array &$state, CricketMatch $match, int $battingTeamNumber): void
+    protected function ensureActiveMatchStateValid(array &$state, CricketMatch $match): void
     {
-        $battingPlayers = $match->players()->where('team_number', $battingTeamNumber)->get();
+        $battingTeamNumber = $state['batting_team_number'] ?? 1;
+        $bowlingTeamNumber = $battingTeamNumber == 1 ? 2 : 1;
 
+        $battingPlayers = $match->players()->where('team_number', $battingTeamNumber)->get();
+        $bowlingPlayers = $match->players()->where('team_number', $bowlingTeamNumber)->get();
+
+        // 1. Validate Batsmen
         $isPlayerOut = function(?int $playerId) use ($battingPlayers) {
             if (!$playerId) return true;
             $p = $battingPlayers->firstWhere('id', $playerId);
@@ -792,14 +823,14 @@ class MatchController extends Controller
             });
         };
 
-        // If striker is missing or already OUT, replace with next available not-out batsman
+        // If striker is missing, invalid or already OUT, replace with next available not-out batsman
         if ($isPlayerOut($state['striker_id'] ?? null)) {
             $exclude = array_filter([$state['non_striker_id'] ?? null]);
             $next = $availableNotOut($exclude)->first();
             $state['striker_id'] = $next?->id ?? null;
         }
 
-        // If non-striker is missing, already OUT, or duplicate of striker, replace
+        // If non-striker is missing, invalid, already OUT, or duplicate of striker, replace
         if ($isPlayerOut($state['non_striker_id'] ?? null) || (!empty($state['non_striker_id']) && $state['non_striker_id'] === ($state['striker_id'] ?? null))) {
             $exclude = array_filter([$state['striker_id'] ?? null]);
             $next = $availableNotOut($exclude)->first();
@@ -809,6 +840,25 @@ class MatchController extends Controller
         // Check if both are empty (team is all out)
         if (empty($state['striker_id']) && empty($state['non_striker_id'])) {
             $state['all_out'] = true;
+        }
+
+        // 2. Validate Bowler: MUST belong to this match and bowling team
+        $currentBowlerId = $state['bowler_id'] ?? null;
+        $isValidBowler = false;
+        if ($currentBowlerId) {
+            $isValidBowler = $bowlingPlayers->contains('id', $currentBowlerId);
+        }
+
+        if (!$isValidBowler && $bowlingPlayers->isNotEmpty()) {
+            // Find a preferred bowler (roles with Bowler or All-Rounder) or first available
+            $preferred = $bowlingPlayers->first(function($p) {
+                $role = strtolower((string)$p->player_role);
+                return str_contains($role, 'bowler') || str_contains($role, 'all-rounder');
+            }) ?? $bowlingPlayers->first();
+
+            $state['bowler_id'] = $preferred?->id ?? null;
+        } elseif (!$isValidBowler) {
+            $state['bowler_id'] = null;
         }
     }
 
