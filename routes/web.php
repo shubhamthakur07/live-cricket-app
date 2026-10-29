@@ -32,6 +32,7 @@ Route::middleware('auth')->group(function () {
     Route::put('/matches/{match}', [MatchController::class, 'update'])->name('matches.update');
     Route::delete('/matches/{match}', [MatchController::class, 'destroy'])->name('matches.destroy');
     Route::post('/matches/{match}/quick-score', [MatchController::class, 'quickScore'])->name('matches.quick-score');
+    Route::post('/matches/{match}/players/{player}/stats', [MatchController::class, 'updatePlayerStats'])->name('matches.players.update-stats');
     Route::post('/matches/{match}/scores', [MatchController::class, 'storeScore'])->name('matches.scores.store');
     Route::put('/matches/{match}/scores/{score}', [MatchController::class, 'updateScore'])->name('matches.scores.update');
     Route::delete('/matches/{match}/scores/{score}', [MatchController::class, 'destroyScore'])->name('matches.scores.destroy');

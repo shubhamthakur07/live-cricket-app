@@ -372,6 +372,83 @@ class MatchController extends Controller
     }
 
     /**
+     * CricHeroes update individual player runs, wickets, overs & dismissal stats.
+     */
+    public function updatePlayerStats(Request $request, CricketMatch $match, \App\Models\MatchPlayer $player): JsonResponse
+    {
+        $this->authorizeMatch($match);
+
+        $validated = $request->validate([
+            'runs_scored' => 'required|integer|min:0',
+            'balls_faced' => 'required|integer|min:0',
+            'fours' => 'nullable|integer|min:0',
+            'sixes' => 'nullable|integer|min:0',
+            'dismissal' => 'nullable|string|max:100',
+            'overs_bowled' => 'nullable|string|max:10',
+            'maidens' => 'nullable|integer|min:0',
+            'runs_conceded' => 'nullable|integer|min:0',
+            'wickets_taken' => 'nullable|integer|min:0|max:10',
+            'sync_team_score' => 'nullable|boolean',
+        ]);
+
+        $player->update([
+            'runs_scored' => $validated['runs_scored'],
+            'balls_faced' => $validated['balls_faced'],
+            'fours' => $validated['fours'] ?? 0,
+            'sixes' => $validated['sixes'] ?? 0,
+            'dismissal' => $validated['dismissal'] ?: 'not out',
+            'overs_bowled' => $validated['overs_bowled'] ?: '0.0',
+            'maidens' => $validated['maidens'] ?? 0,
+            'runs_conceded' => $validated['runs_conceded'] ?? 0,
+            'wickets_taken' => $validated['wickets_taken'] ?? 0,
+        ]);
+
+        // Auto-link registered user if phone matches
+        $user = $player->user;
+        if (!$user && $player->player_phone) {
+            $clean = preg_replace('/[^0-9]/', '', $player->player_phone);
+            $user = \App\Models\User::whereRaw("REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?", ["%{$clean}%"])->first();
+            if ($user) {
+                $player->update(['user_id' => $user->id]);
+            }
+        }
+
+        // Recalculate player's career passport stats
+        if ($user) {
+            $user->recalculateCricketStats();
+        }
+
+        // Optional: auto-sync team totals
+        if (!empty($validated['sync_team_score'])) {
+            $teamPlayers = \App\Models\MatchPlayer::where('match_id', $match->id)
+                ->where('team_number', $player->team_number)
+                ->get();
+            $teamTotalRuns = $teamPlayers->sum('runs_scored');
+            $teamTotalWickets = $teamPlayers->filter(fn($p) => $p->dismissal !== 'not out' && $p->dismissal !== 'dnb')->count();
+
+            $score = $match->scores()->updateOrCreate(
+                [
+                    'match_id' => $match->id,
+                    'inning_number' => $player->team_number,
+                ],
+                [
+                    'batting_team' => $player->team_name,
+                    'runs' => $teamTotalRuns,
+                    'wickets' => $teamTotalWickets,
+                    'overs' => $match->getScoreForTeam($player->team_name)?->overs ?? '0.0',
+                    'status' => $match->status === 'completed' ? 'completed' : 'live',
+                ]
+            );
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Stats updated for {$player->player_name}! 🏏",
+            'player' => $player->fresh()->load('user'),
+        ]);
+    }
+
+    /**
      * Remove the specified match from storage.
      */
     public function destroy(CricketMatch $match): RedirectResponse

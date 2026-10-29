@@ -52,4 +52,27 @@ class MatchPlayer extends Model
     {
         return $this->belongsTo(User::class, 'user_id');
     }
+
+    /**
+     * Match batting strike rate.
+     */
+    public function getStrikeRateAttribute(): float
+    {
+        if ($this->balls_faced <= 0) return 0.0;
+        return round(($this->runs_scored / $this->balls_faced) * 100, 1);
+    }
+
+    /**
+     * Match bowling economy rate.
+     */
+    public function getEconomyRateAttribute(): float
+    {
+        if (empty($this->overs_bowled) || $this->overs_bowled === '0.0') return 0.0;
+        $parts = explode('.', (string) $this->overs_bowled);
+        $ov = (int) ($parts[0] ?? 0);
+        $bl = (int) ($parts[1] ?? 0);
+        $balls = ($ov * 6) + $bl;
+        if ($balls <= 0) return 0.0;
+        return round(($this->runs_conceded / $balls) * 6, 2);
+    }
 }
