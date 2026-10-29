@@ -58,6 +58,43 @@
         this.toastMsg = msg;
         setTimeout(() => { this.toastMsg = ''; }, 3000);
     },
+    advanceBall() {
+        let parts = (this.scoreOvers || '0.0').toString().split('.');
+        let ov = parseInt(parts[0] || 0);
+        let bl = parseInt(parts[1] || 0);
+        bl += 1;
+        if (bl >= 6) {
+            ov += 1;
+            bl = 0;
+        }
+        this.scoreOvers = ov + '.' + bl;
+    },
+    addBallRun(r) {
+        this.scoreRuns = parseInt(this.scoreRuns || 0) + r;
+        this.advanceBall();
+    },
+    addBallWicket() {
+        if (this.scoreWickets < 10) {
+            this.scoreWickets = parseInt(this.scoreWickets || 0) + 1;
+        }
+        this.advanceBall();
+    },
+    addExtra(r) {
+        this.scoreRuns = parseInt(this.scoreRuns || 0) + r;
+        this.showToast('Extra (WD/NB): +' + r + ' run (Ball not counted)');
+    },
+    undoBall() {
+        let parts = (this.scoreOvers || '0.0').toString().split('.');
+        let ov = parseInt(parts[0] || 0);
+        let bl = parseInt(parts[1] || 0);
+        if (bl > 0) {
+            bl -= 1;
+        } else if (ov > 0) {
+            ov -= 1;
+            bl = 5;
+        }
+        this.scoreOvers = ov + '.' + bl;
+    },
     addRuns(r) {
         this.scoreRuns = parseInt(this.scoreRuns || 0) + r;
     },
@@ -664,16 +701,27 @@
                     </button>
                 </div>
 
-                <!-- Fast Scoring Buttons -->
+                <!-- Fast Scoring Buttons (Ball by Ball) -->
                 <div>
-                    <span class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Fast Add Runs</span>
-                    <div class="grid grid-cols-6 gap-2 sm:gap-3 text-sm font-black">
-                        <button type="button" @click="addRuns(0)" class="py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">Dot (0)</button>
-                        <button type="button" @click="addRuns(1)" class="py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">+1</button>
-                        <button type="button" @click="addRuns(2)" class="py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">+2</button>
-                        <button type="button" @click="addRuns(4)" class="py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white active:scale-95 transition">4️⃣ Four</button>
-                        <button type="button" @click="addRuns(6)" class="py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white active:scale-95 transition">6️⃣ Six</button>
-                        <button type="button" @click="addWicket()" class="py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white active:scale-95 transition">W ☝️ Wicket</button>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Ball-By-Ball Scoring (Advances Overs Automatically)</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-mono font-bold text-amber-400">Overs: <span x-text="scoreOvers"></span></span>
+                            <button type="button" @click="undoBall()" class="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-300 text-[10px] font-bold" title="Undo 1 ball">
+                                ↩️ Undo Ball
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-4 sm:grid-cols-9 gap-2 text-xs font-black">
+                        <button type="button" @click="addBallRun(0)" class="py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">Dot (0)</button>
+                        <button type="button" @click="addBallRun(1)" class="py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">+1</button>
+                        <button type="button" @click="addBallRun(2)" class="py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">+2</button>
+                        <button type="button" @click="addBallRun(3)" class="py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white active:scale-95 transition">+3</button>
+                        <button type="button" @click="addBallRun(4)" class="py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white active:scale-95 transition">4️⃣ Four</button>
+                        <button type="button" @click="addBallRun(6)" class="py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white active:scale-95 transition">6️⃣ Six</button>
+                        <button type="button" @click="addBallWicket()" class="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white active:scale-95 transition">☝️ Wicket</button>
+                        <button type="button" @click="addExtra(1)" class="py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white active:scale-95 transition" title="Wide Ball (Extra run, ball not counted)">Wide</button>
+                        <button type="button" @click="addExtra(1)" class="py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white active:scale-95 transition" title="No Ball (Extra run, ball not counted)">No Ball</button>
                     </div>
                 </div>
 

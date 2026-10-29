@@ -426,6 +426,22 @@ class MatchController extends Controller
             $teamTotalRuns = $teamPlayers->sum('runs_scored');
             $teamTotalWickets = $teamPlayers->filter(fn($p) => $p->dismissal !== 'not out' && $p->dismissal !== 'dnb')->count();
 
+            // Calculate overs from opponent bowlers
+            $opponentTeamNum = $player->team_number == 1 ? 2 : 1;
+            $opponentBowlers = \App\Models\MatchPlayer::where('match_id', $match->id)
+                ->where('team_number', $opponentTeamNum)
+                ->get();
+            $totalBalls = 0;
+            foreach ($opponentBowlers as $ob) {
+                if ($ob->overs_bowled && $ob->overs_bowled !== '0.0') {
+                    $parts = explode('.', (string) $ob->overs_bowled);
+                    $totalBalls += ((int) ($parts[0] ?? 0) * 6) + (int) ($parts[1] ?? 0);
+                }
+            }
+            $calculatedOvers = floor($totalBalls / 6) . '.' . ($totalBalls % 6);
+            $existingOvers = $match->getScoreForTeam($player->team_name)?->overs;
+            $finalOvers = ($totalBalls > 0) ? $calculatedOvers : ($existingOvers ?: '0.0');
+
             $score = $match->scores()->updateOrCreate(
                 [
                     'match_id' => $match->id,
@@ -435,7 +451,7 @@ class MatchController extends Controller
                     'batting_team' => $player->team_name,
                     'runs' => $teamTotalRuns,
                     'wickets' => $teamTotalWickets,
-                    'overs' => $match->getScoreForTeam($player->team_name)?->overs ?? '0.0',
+                    'overs' => $finalOvers,
                     'status' => $match->status === 'completed' ? 'completed' : 'live',
                 ]
             );
