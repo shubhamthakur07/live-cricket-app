@@ -751,7 +751,15 @@
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-white/5">
-                                @forelse($match->team1Players as $p)
+                                @php
+                                    $t1Batters = $team1BattingSquad ?? $match->team1Players;
+                                    $strikerId = $state['striker_id'] ?? ($striker?->id ?? null);
+                                    $nonStrikerId = $state['non_striker_id'] ?? ($nonStriker?->id ?? null);
+                                @endphp
+                                @forelse($t1Batters as $p)
+                                    @php
+                                        $pHasBatted = $p->balls_faced > 0 || $p->runs_scored > 0 || in_array($p->id, array_filter([$strikerId, $nonStrikerId])) || ($p->dismissal && !in_array(strtolower(trim($p->dismissal)), ['not out', 'dnb', 'yet to bat', '']));
+                                    @endphp
                                     <tr class="hover:bg-white/5 transition"
                                         :class="liveStriker && liveStriker.id === {{ $p->id }} ? 'bg-emerald-950/20' : ''">
                                         <td class="py-3 px-4">
@@ -779,7 +787,9 @@
                                             </div>
                                         </td>
                                         <td class="py-3 px-3 text-slate-300 text-[11px]">
-                                            @if($p->dismissal === 'not out')
+                                            @if(!$pHasBatted)
+                                                <span class="text-slate-500 italic">yet to bat</span>
+                                            @elseif($p->dismissal === 'not out' || empty($p->dismissal))
                                                 <span class="text-emerald-400 font-bold">not out</span>
                                             @elseif($p->dismissal === 'dnb')
                                                 <span class="text-slate-500 italic">did not bat</span>
@@ -818,6 +828,23 @@
                             </tbody>
                         </table>
                     </div>
+
+                    @php
+                        $yetToBat1 = $t1Batters->filter(function($pl) use ($strikerId, $nonStrikerId) {
+                            $hasBatted = $pl->balls_faced > 0 || $pl->runs_scored > 0 || in_array($pl->id, array_filter([$strikerId, $nonStrikerId])) || ($pl->dismissal && !in_array(strtolower(trim($pl->dismissal)), ['not out', 'dnb', 'yet to bat', '']));
+                            return !$hasBatted;
+                        });
+                    @endphp
+                    @if($yetToBat1->isNotEmpty())
+                        <div class="p-3 bg-white/5 rounded-2xl border border-white/5 text-xs flex items-center gap-2 flex-wrap">
+                            <span class="text-slate-400 font-bold uppercase text-[10px] tracking-wider shrink-0">Yet to Bat:</span>
+                            @foreach($yetToBat1 as $yb)
+                                <span class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-xs border border-white/5 font-medium">
+                                    {{ $yb->player_name }}
+                                </span>
+                            @endforeach
+                        </div>
+                    @endif
                 </div>
 
                 <!-- Bowling Table: Team 2 Bowlers bowling against Team 1 -->
@@ -932,8 +959,17 @@
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-white/5">
-                                @forelse($match->team2Players as $p)
-                                    <tr class="hover:bg-white/5 transition">
+                                @php
+                                    $t2Batters = $team2BattingSquad ?? $match->team2Players;
+                                    $t2StrikerId = ($state['batting_team_number'] ?? 1) == 2 ? ($state['striker_id'] ?? null) : null;
+                                    $t2NonStrikerId = ($state['batting_team_number'] ?? 1) == 2 ? ($state['non_striker_id'] ?? null) : null;
+                                @endphp
+                                @forelse($t2Batters as $p)
+                                    @php
+                                        $p2HasBatted = $p->balls_faced > 0 || $p->runs_scored > 0 || in_array($p->id, array_filter([$t2StrikerId, $t2NonStrikerId])) || ($p->dismissal && !in_array(strtolower(trim($p->dismissal)), ['not out', 'dnb', 'yet to bat', '']));
+                                    @endphp
+                                    <tr class="hover:bg-white/5 transition"
+                                        :class="liveStriker && liveStriker.id === {{ $p->id }} ? 'bg-rose-950/20' : ''">
                                         <td class="py-3 px-4">
                                             <div class="flex items-center gap-2">
                                                 <div class="w-6 h-6 rounded-md bg-rose-600/30 text-rose-300 font-bold text-[10px] flex items-center justify-center shrink-0">
@@ -948,6 +984,9 @@
                                                         @else
                                                             <span>{{ $p->player_name }}</span>
                                                         @endif
+                                                        <template x-if="liveStriker && liveStriker.id === {{ $p->id }}">
+                                                            <span class="px-1 rounded bg-rose-600 text-[8px] font-black text-white">*</span>
+                                                        </template>
                                                         @if($p->is_captain)<span class="px-1 rounded bg-red-600 text-[8px] font-black text-white">C</span>@endif
                                                         @if($p->is_wicketkeeper)<span class="px-1 rounded bg-amber-600 text-[8px] font-black text-white">WK</span>@endif
                                                     </div>
@@ -956,7 +995,9 @@
                                             </div>
                                         </td>
                                         <td class="py-3 px-3 text-slate-300 text-[11px]">
-                                            @if($p->dismissal === 'not out')
+                                            @if(!$p2HasBatted)
+                                                <span class="text-slate-500 italic">yet to bat</span>
+                                            @elseif($p->dismissal === 'not out' || empty($p->dismissal))
                                                 <span class="text-emerald-400 font-bold">not out</span>
                                             @elseif($p->dismissal === 'dnb')
                                                 <span class="text-slate-500 italic">did not bat</span>
@@ -995,6 +1036,23 @@
                             </tbody>
                         </table>
                     </div>
+
+                    @php
+                        $yetToBat2 = $t2Batters->filter(function($pl) use ($t2StrikerId, $t2NonStrikerId) {
+                            $hasBatted = $pl->balls_faced > 0 || $pl->runs_scored > 0 || in_array($pl->id, array_filter([$t2StrikerId, $t2NonStrikerId])) || ($pl->dismissal && !in_array(strtolower(trim($pl->dismissal)), ['not out', 'dnb', 'yet to bat', '']));
+                            return !$hasBatted;
+                        });
+                    @endphp
+                    @if($yetToBat2->isNotEmpty())
+                        <div class="p-3 bg-white/5 rounded-2xl border border-white/5 text-xs flex items-center gap-2 flex-wrap">
+                            <span class="text-slate-400 font-bold uppercase text-[10px] tracking-wider shrink-0">Yet to Bat:</span>
+                            @foreach($yetToBat2 as $yb)
+                                <span class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-xs border border-white/5 font-medium">
+                                    {{ $yb->player_name }}
+                                </span>
+                            @endforeach
+                        </div>
+                    @endif
                 </div>
 
                 <!-- Bowling Table: Team 1 Bowlers bowling against Team 2 -->

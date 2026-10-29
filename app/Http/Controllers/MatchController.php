@@ -235,7 +235,10 @@ class MatchController extends Controller
         $nonStriker = ($state['non_striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['non_striker_id']) : null;
         $bowler = ($state['bowler_id'] ?? null) ? \App\Models\MatchPlayer::find($state['bowler_id']) : null;
 
-        return view('matches.show', compact('match', 'teams', 'state', 'striker', 'nonStriker', 'bowler'));
+        $team1BattingSquad = $this->getSortedBattingSquad($match, 1, $state);
+        $team2BattingSquad = $this->getSortedBattingSquad($match, 2, $state);
+
+        return view('matches.show', compact('match', 'teams', 'state', 'striker', 'nonStriker', 'bowler', 'team1BattingSquad', 'team2BattingSquad'));
     }
 
     /**
@@ -545,10 +548,16 @@ class MatchController extends Controller
 
         // Action: Select Openers & Bowler
         if ($action === 'select_openers') {
-            $state['striker_id'] = $request->input('striker_id') ? (int) $request->input('striker_id') : null;
-            $state['non_striker_id'] = $request->input('non_striker_id') ? (int) $request->input('non_striker_id') : null;
+            $strikerId = $request->input('striker_id') ? (int) $request->input('striker_id') : null;
+            $nonStrikerId = $request->input('non_striker_id') ? (int) $request->input('non_striker_id') : null;
+            $state['striker_id'] = $strikerId;
+            $state['non_striker_id'] = $nonStrikerId;
             $state['bowler_id'] = $request->input('bowler_id') ? (int) $request->input('bowler_id') : null;
             $state['this_over'] = [];
+
+            $teamNum = $state['batting_team_number'] ?? 1;
+            $state["batting_order_{$teamNum}"] = array_values(array_filter([$strikerId, $nonStrikerId]));
+
             $match->update(['live_state' => $state, 'status' => 'live']);
 
             return $this->cricHeroesResponse($match, 'Openers & Opening Bowler ready! Game ON 🏏');
@@ -860,6 +869,62 @@ class MatchController extends Controller
         } elseif (!$isValidBowler) {
             $state['bowler_id'] = null;
         }
+
+        // 3. Batting order tracking: Track chronological order of batsmen coming to the crease
+        $orderKey = "batting_order_{$battingTeamNumber}";
+        $currentOrder = $state[$orderKey] ?? [];
+        if (!empty($state['striker_id']) && !in_array((int)$state['striker_id'], $currentOrder)) {
+            $currentOrder[] = (int) $state['striker_id'];
+        }
+        if (!empty($state['non_striker_id']) && !in_array((int)$state['non_striker_id'], $currentOrder)) {
+            $currentOrder[] = (int) $state['non_striker_id'];
+        }
+        $state[$orderKey] = array_values(array_unique(array_filter($currentOrder)));
+    }
+
+    public function getSortedBattingSquad(CricketMatch $match, int $teamNumber, array $state): \Illuminate\Support\Collection
+    {
+        $players = $teamNumber == 1 ? $match->team1Players : $match->team2Players;
+        $orderKey = "batting_order_{$teamNumber}";
+        $battingOrder = $state[$orderKey] ?? [];
+
+        $currentStrikerId = $state['striker_id'] ?? null;
+        $currentNonStrikerId = $state['non_striker_id'] ?? null;
+
+        if (empty($battingOrder) && ($state['batting_team_number'] ?? 1) == $teamNumber) {
+            $battingOrder = array_values(array_filter([$currentStrikerId, $currentNonStrikerId]));
+        }
+
+        return $players->sort(function ($a, $b) use ($battingOrder, $currentStrikerId, $currentNonStrikerId) {
+            $aInOrder = array_search($a->id, $battingOrder);
+            $bInOrder = array_search($b->id, $battingOrder);
+
+            $aIsOut = $a->dismissal && !in_array(strtolower(trim($a->dismissal)), ['not out', 'yet to bat', 'did not bat', 'dnb', '']);
+            $bIsOut = $b->dismissal && !in_array(strtolower(trim($b->dismissal)), ['not out', 'yet to bat', 'did not bat', 'dnb', '']);
+
+            $aIsAtCrease = in_array($a->id, array_filter([$currentStrikerId, $currentNonStrikerId]));
+            $bIsAtCrease = in_array($b->id, array_filter([$currentStrikerId, $currentNonStrikerId]));
+
+            $aHasBatted = ($aInOrder !== false) || $a->balls_faced > 0 || $a->runs_scored > 0 || $aIsOut || $aIsAtCrease;
+            $bHasBatted = ($bInOrder !== false) || $b->balls_faced > 0 || $b->runs_scored > 0 || $bIsOut || $bIsAtCrease;
+
+            // Batsmen who have batted come before those who have not
+            if ($aHasBatted && !$bHasBatted) return -1;
+            if (!$aHasBatted && $bHasBatted) return 1;
+
+            // Both batted: sort by batting order of appearance (index in batting_order)
+            if ($aHasBatted && $bHasBatted) {
+                if ($aInOrder !== false && $bInOrder !== false) {
+                    return $aInOrder <=> $bInOrder;
+                }
+                if ($aInOrder !== false) return -1;
+                if ($bInOrder !== false) return 1;
+                return $a->id <=> $b->id;
+            }
+
+            // Neither batted: sort by squad order / id
+            return $a->id <=> $b->id;
+        })->values();
     }
 
     protected function incrementOversString(?string $overs): string
