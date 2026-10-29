@@ -213,7 +213,41 @@ class MatchController extends Controller
     {
         $match->load(['scores', 'players.user']);
         $teams = Team::orderBy('name')->get();
-        return view('matches.show', compact('match', 'teams'));
+
+        $state = $match->live_state ?: [
+            'inning' => 1,
+            'batting_team_number' => 1,
+            'bowling_team_number' => 2,
+            'striker_id' => null,
+            'non_striker_id' => null,
+            'bowler_id' => null,
+            'this_over' => [],
+            'history' => [],
+        ];
+
+        $battingPlayers = $match->team1Players;
+        $bowlingPlayers = $match->team2Players;
+
+        $notOutBattingPlayers = $battingPlayers->filter(function($p) {
+            $d = strtolower(trim((string)$p->dismissal));
+            return empty($d) || $d === 'not out';
+        });
+
+        if (empty($state['striker_id']) && $notOutBattingPlayers->isNotEmpty()) {
+            $state['striker_id'] = $notOutBattingPlayers->first()->id;
+        }
+        if (empty($state['non_striker_id']) && $notOutBattingPlayers->count() > 1) {
+            $state['non_striker_id'] = $notOutBattingPlayers->where('id', '!=', $state['striker_id'])->first()?->id;
+        }
+        if (empty($state['bowler_id']) && $bowlingPlayers->isNotEmpty()) {
+            $state['bowler_id'] = $bowlingPlayers->first()->id;
+        }
+
+        $striker = ($state['striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['striker_id']) : null;
+        $nonStriker = ($state['non_striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['non_striker_id']) : null;
+        $bowler = ($state['bowler_id'] ?? null) ? \App\Models\MatchPlayer::find($state['bowler_id']) : null;
+
+        return view('matches.show', compact('match', 'teams', 'state', 'striker', 'nonStriker', 'bowler'));
     }
 
     /**
@@ -462,6 +496,353 @@ class MatchController extends Controller
             'message' => "Stats updated for {$player->player_name}! 🏏",
             'player' => $player->fresh()->load('user'),
         ]);
+    }
+
+    /**
+     * CricHeroes Authentic Ball-By-Ball Scoring Action.
+     */
+    public function recordBall(Request $request, CricketMatch $match): JsonResponse
+    {
+        $this->authorizeMatch($match);
+
+        $action = $request->input('action', 'run');
+        $state = $match->live_state ?: [
+            'inning' => 1,
+            'batting_team_number' => 1,
+            'bowling_team_number' => 2,
+            'striker_id' => null,
+            'non_striker_id' => null,
+            'bowler_id' => null,
+            'this_over' => [],
+            'history' => [],
+        ];
+
+        $battingTeamNumber = $state['batting_team_number'] ?? 1;
+        $battingTeamName = $battingTeamNumber == 1 ? $match->team1_name : $match->team2_name;
+        $score = $match->scores()->firstOrCreate(
+            [
+                'match_id' => $match->id,
+                'inning_number' => $battingTeamNumber,
+            ],
+            [
+                'batting_team' => $battingTeamName,
+                'runs' => 0,
+                'wickets' => 0,
+                'overs' => '0.0',
+                'status' => 'live',
+            ]
+        );
+
+        // Save previous snapshot for 1-click Undo
+        if ($action !== 'undo') {
+            $history = $state['history'] ?? [];
+            $history[] = [
+                'state' => [
+                    'striker_id' => $state['striker_id'] ?? null,
+                    'non_striker_id' => $state['non_striker_id'] ?? null,
+                    'bowler_id' => $state['bowler_id'] ?? null,
+                    'this_over' => $state['this_over'] ?? [],
+                ],
+                'score' => [
+                    'runs' => $score->runs,
+                    'wickets' => $score->wickets,
+                    'overs' => $score->overs,
+                ],
+                'striker_stats' => ($state['striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['striker_id'])?->only(['runs_scored', 'balls_faced', 'fours', 'sixes', 'dismissal']) : null,
+                'bowler_stats' => ($state['bowler_id'] ?? null) ? \App\Models\MatchPlayer::find($state['bowler_id'])?->only(['overs_bowled', 'maidens', 'runs_conceded', 'wickets_taken']) : null,
+            ];
+            if (count($history) > 20) array_shift($history);
+            $state['history'] = $history;
+        }
+
+        // Action: Select Openers & Bowler
+        if ($action === 'select_openers') {
+            $state['striker_id'] = $request->input('striker_id') ? (int) $request->input('striker_id') : null;
+            $state['non_striker_id'] = $request->input('non_striker_id') ? (int) $request->input('non_striker_id') : null;
+            $state['bowler_id'] = $request->input('bowler_id') ? (int) $request->input('bowler_id') : null;
+            $state['this_over'] = [];
+            $match->update(['live_state' => $state, 'status' => 'live']);
+
+            return $this->cricHeroesResponse($match, 'Openers & Opening Bowler ready! Game ON 🏏');
+        }
+
+        // Action: Select / Change Bowler
+        if ($action === 'select_bowler') {
+            $state['bowler_id'] = (int) $request->input('bowler_id');
+            $state['this_over'] = [];
+            $state['needs_new_bowler'] = false;
+            $match->update(['live_state' => $state]);
+
+            return $this->cricHeroesResponse($match, 'New Bowler selected! 🎯');
+        }
+
+        // Action: Swap Strike (Batter Strike Rotation)
+        if ($action === 'swap_strike') {
+            $tmp = $state['striker_id'];
+            $state['striker_id'] = $state['non_striker_id'];
+            $state['non_striker_id'] = $tmp;
+            $match->update(['live_state' => $state]);
+
+            return $this->cricHeroesResponse($match, 'Strike rotated! 🔄');
+        }
+
+        // Action: Undo Last Ball
+        if ($action === 'undo') {
+            $history = $state['history'] ?? [];
+            if (!empty($history)) {
+                $last = array_pop($history);
+                $state['striker_id'] = $last['state']['striker_id'];
+                $state['non_striker_id'] = $last['state']['non_striker_id'];
+                $state['bowler_id'] = $last['state']['bowler_id'];
+                $state['this_over'] = $last['state']['this_over'];
+                $state['history'] = $history;
+                $state['needs_new_bowler'] = false;
+
+                $score->update($last['score']);
+
+                if (!empty($last['striker_stats']) && $state['striker_id']) {
+                    \App\Models\MatchPlayer::where('id', $state['striker_id'])->update($last['striker_stats']);
+                }
+                if (!empty($last['bowler_stats']) && $state['bowler_id']) {
+                    \App\Models\MatchPlayer::where('id', $state['bowler_id'])->update($last['bowler_stats']);
+                }
+
+                $match->update(['live_state' => $state]);
+                return $this->cricHeroesResponse($match, 'Last delivery undone! ↩️');
+            }
+            return $this->cricHeroesResponse($match, 'Nothing to undo.');
+        }
+
+        // Auto-select openers if not selected yet
+        $battingPlayers = $match->players()->where('team_number', $battingTeamNumber)->get();
+        $bowlingPlayers = $match->players()->where('team_number', $battingTeamNumber == 1 ? 2 : 1)->get();
+
+        $notOutBattingPlayers = $battingPlayers->filter(function($p) {
+            $d = strtolower(trim((string)$p->dismissal));
+            return empty($d) || $d === 'not out';
+        });
+
+        if (empty($state['striker_id']) && $notOutBattingPlayers->isNotEmpty()) {
+            $state['striker_id'] = $notOutBattingPlayers->first()->id;
+        }
+        if (empty($state['non_striker_id']) && $notOutBattingPlayers->count() > 1) {
+            $state['non_striker_id'] = $notOutBattingPlayers->where('id', '!=', $state['striker_id'])->first()?->id;
+        }
+        if (empty($state['bowler_id']) && $bowlingPlayers->isNotEmpty()) {
+            $state['bowler_id'] = $bowlingPlayers->first()->id;
+        }
+
+        $striker = ($state['striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['striker_id']) : null;
+        $nonStriker = ($state['non_striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['non_striker_id']) : null;
+        $bowler = ($state['bowler_id'] ?? null) ? \App\Models\MatchPlayer::find($state['bowler_id']) : null;
+
+        $isLegalDelivery = false;
+        $overBallText = '0';
+        $runsScored = 0;
+        $isWicket = false;
+        $overCompleted = false;
+
+        // Normal Run (0, 1, 2, 3, 4, 6)
+        if ($action === 'run') {
+            $runsScored = (int) $request->input('runs', 0);
+            $isLegalDelivery = true;
+            $overBallText = (string) $runsScored;
+
+            if ($striker) {
+                $striker->runs_scored += $runsScored;
+                $striker->balls_faced += 1;
+                if ($runsScored === 4) $striker->fours += 1;
+                if ($runsScored === 6) $striker->sixes += 1;
+                $striker->save();
+                $striker->user?->recalculateCricketStats();
+            }
+
+            if ($bowler) {
+                $bowler->runs_conceded += $runsScored;
+                $bowler = $this->incrementBowlerBall($bowler);
+                $bowler->save();
+                $bowler->user?->recalculateCricketStats();
+            }
+
+            $score->runs += $runsScored;
+            $score->overs = $this->incrementOversString($score->overs);
+            $score->save();
+
+            // Odd runs rotate strike!
+            if (in_array($runsScored, [1, 3, 5])) {
+                $tmp = $state['striker_id'];
+                $state['striker_id'] = $state['non_striker_id'];
+                $state['non_striker_id'] = $tmp;
+            }
+        } 
+        // Wide or No Ball (Extras)
+        elseif ($action === 'wide' || $action === 'no_ball') {
+            $extraRuns = (int) $request->input('runs', 1);
+            $overBallText = ($action === 'wide') ? ($extraRuns > 1 ? "{$extraRuns}WD" : 'WD') : ($extraRuns > 1 ? "{$extraRuns}NB" : 'NB');
+            $isLegalDelivery = false;
+
+            if ($bowler) {
+                $bowler->runs_conceded += $extraRuns;
+                $bowler->save();
+                $bowler->user?->recalculateCricketStats();
+            }
+
+            $score->runs += $extraRuns;
+            $score->save();
+        } 
+        // Byes / Leg Byes
+        elseif ($action === 'bye' || $action === 'leg_bye') {
+            $runs = (int) $request->input('runs', 1);
+            $isLegalDelivery = true;
+            $overBallText = ($action === 'bye') ? "{$runs}B" : "{$runs}LB";
+
+            if ($striker) {
+                $striker->balls_faced += 1;
+                $striker->save();
+            }
+            if ($bowler) {
+                $bowler = $this->incrementBowlerBall($bowler);
+                $bowler->save();
+            }
+
+            $score->runs += $runs;
+            $score->overs = $this->incrementOversString($score->overs);
+            $score->save();
+
+            if (in_array($runs, [1, 3])) {
+                $tmp = $state['striker_id'];
+                $state['striker_id'] = $state['non_striker_id'];
+                $state['non_striker_id'] = $tmp;
+            }
+        } 
+        // Wicket
+        elseif ($action === 'wicket') {
+            $isLegalDelivery = true;
+            $isWicket = true;
+            $overBallText = 'W';
+            $howOut = $request->input('how_out', 'bowled');
+            $dismissalText = $howOut;
+            if ($bowler && !in_array($howOut, ['run out', 'timed out'])) {
+                $dismissalText .= " b {$bowler->player_name}";
+            }
+
+            if ($striker) {
+                $striker->balls_faced += 1;
+                $striker->dismissal = $dismissalText;
+                $striker->save();
+                $striker->user?->recalculateCricketStats();
+            }
+
+            if ($bowler && $howOut !== 'run out') {
+                $bowler->wickets_taken += 1;
+                $bowler = $this->incrementBowlerBall($bowler);
+                $bowler->save();
+                $bowler->user?->recalculateCricketStats();
+            } elseif ($bowler) {
+                $bowler = $this->incrementBowlerBall($bowler);
+                $bowler->save();
+            }
+
+            $score->wickets += 1;
+            $score->overs = $this->incrementOversString($score->overs);
+            $score->save();
+
+            // Next batsman: if not specified, automatically find next available batsman in order
+            $nextId = $request->input('next_batsman_id');
+            if (empty($nextId)) {
+                $battingSquad = $score->inning_number == 1 ? $match->team1Players : $match->team2Players;
+                $nextBatter = $battingSquad->filter(function ($p) use ($striker, $state) {
+                    if ($striker && $p->id == $striker->id) return false;
+                    if (!empty($state['non_striker_id']) && $p->id == $state['non_striker_id']) return false;
+                    $d = strtolower(trim((string)$p->dismissal));
+                    return empty($d) || $d === 'not out';
+                })->first();
+
+                $nextId = $nextBatter?->id;
+            }
+
+            if ($nextId) {
+                $state['striker_id'] = (int) $nextId;
+            } else {
+                // No more batsmen available (All Out / Inning Complete)
+                $state['striker_id'] = null;
+                $state['all_out'] = true;
+            }
+        }
+
+        // Add to this_over delivery chips
+        $thisOver = $state['this_over'] ?? [];
+        $thisOver[] = $overBallText;
+        $state['this_over'] = $thisOver;
+
+        // Check if over completed (legal ball % 6 == 0)
+        if ($isLegalDelivery) {
+            $parts = explode('.', (string) $score->overs);
+            $ballsInOver = (int) ($parts[1] ?? 0);
+            if ($ballsInOver === 0) {
+                $overCompleted = true;
+                // Strike automatically rotates for new over!
+                $tmp = $state['striker_id'];
+                $state['striker_id'] = $state['non_striker_id'];
+                $state['non_striker_id'] = $tmp;
+                $state['needs_new_bowler'] = true;
+            }
+        }
+
+        $match->update(['live_state' => $state]);
+
+        return $this->cricHeroesResponse(
+            $match,
+            $isWicket ? 'WICKET! ☝️' : ($runsScored == 6 ? 'SIX! 💥' : ($runsScored == 4 ? 'FOUR! 🏏' : 'Ball recorded! ⚡')),
+            ['over_completed' => $overCompleted, 'wicket' => $isWicket]
+        );
+    }
+
+    protected function incrementOversString(?string $overs): string
+    {
+        $parts = explode('.', (string) ($overs ?: '0.0'));
+        $ov = (int) ($parts[0] ?? 0);
+        $bl = (int) ($parts[1] ?? 0) + 1;
+        if ($bl >= 6) {
+            $ov += 1;
+            $bl = 0;
+        }
+        return "{$ov}.{$bl}";
+    }
+
+    protected function incrementBowlerBall(\App\Models\MatchPlayer $bowler): \App\Models\MatchPlayer
+    {
+        $parts = explode('.', (string) ($bowler->overs_bowled ?: '0.0'));
+        $ov = (int) ($parts[0] ?? 0);
+        $bl = (int) ($parts[1] ?? 0) + 1;
+        if ($bl >= 6) {
+            $ov += 1;
+            $bl = 0;
+        }
+        $bowler->overs_bowled = "{$ov}.{$bl}";
+        return $bowler;
+    }
+
+    protected function cricHeroesResponse(CricketMatch $match, string $msg, array $extra = []): JsonResponse
+    {
+        $match->load(['scores', 'players.user']);
+        $state = $match->live_state ?: [];
+        $striker = ($state['striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['striker_id']) : null;
+        $nonStriker = ($state['non_striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['non_striker_id']) : null;
+        $bowler = ($state['bowler_id'] ?? null) ? \App\Models\MatchPlayer::find($state['bowler_id']) : null;
+
+        $score = $match->scores->where('inning_number', $state['batting_team_number'] ?? 1)->first();
+
+        return response()->json(array_merge([
+            'status' => 'success',
+            'message' => $msg,
+            'state' => $state,
+            'striker' => $striker,
+            'non_striker' => $nonStriker,
+            'bowler' => $bowler,
+            'score' => $score,
+            'match' => $match,
+        ], $extra));
     }
 
     /**

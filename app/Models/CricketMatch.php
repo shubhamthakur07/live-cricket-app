@@ -30,11 +30,13 @@ class CricketMatch extends Model
         'toss_decision',
         'match_result',
         'player_of_match',
+        'live_state',
     ];
 
     protected $casts = [
         'match_date' => 'date',
         'total_overs' => 'integer',
+        'live_state' => 'array',
     ];
 
     public function user(): BelongsTo
