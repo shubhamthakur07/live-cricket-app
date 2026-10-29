@@ -225,22 +225,16 @@ class MatchController extends Controller
             'history' => [],
         ];
 
-        $battingPlayers = $match->team1Players;
-        $bowlingPlayers = $match->team2Players;
+        $battingTeamNumber = $state['batting_team_number'] ?? 1;
+        $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
 
-        $notOutBattingPlayers = $battingPlayers->filter(function($p) {
-            $d = strtolower(trim((string)$p->dismissal));
-            return empty($d) || $d === 'not out';
-        });
-
-        if (empty($state['striker_id']) && $notOutBattingPlayers->isNotEmpty()) {
-            $state['striker_id'] = $notOutBattingPlayers->first()->id;
-        }
-        if (empty($state['non_striker_id']) && $notOutBattingPlayers->count() > 1) {
-            $state['non_striker_id'] = $notOutBattingPlayers->where('id', '!=', $state['striker_id'])->first()?->id;
-        }
+        $bowlingPlayers = $match->players()->where('team_number', $battingTeamNumber == 1 ? 2 : 1)->get();
         if (empty($state['bowler_id']) && $bowlingPlayers->isNotEmpty()) {
             $state['bowler_id'] = $bowlingPlayers->first()->id;
+        }
+
+        if ($state !== $match->live_state) {
+            $match->update(['live_state' => $state]);
         }
 
         $striker = ($state['striker_id'] ?? null) ? \App\Models\MatchPlayer::find($state['striker_id']) : null;
@@ -617,17 +611,8 @@ class MatchController extends Controller
         $battingPlayers = $match->players()->where('team_number', $battingTeamNumber)->get();
         $bowlingPlayers = $match->players()->where('team_number', $battingTeamNumber == 1 ? 2 : 1)->get();
 
-        $notOutBattingPlayers = $battingPlayers->filter(function($p) {
-            $d = strtolower(trim((string)$p->dismissal));
-            return empty($d) || $d === 'not out';
-        });
+        $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
 
-        if (empty($state['striker_id']) && $notOutBattingPlayers->isNotEmpty()) {
-            $state['striker_id'] = $notOutBattingPlayers->first()->id;
-        }
-        if (empty($state['non_striker_id']) && $notOutBattingPlayers->count() > 1) {
-            $state['non_striker_id'] = $notOutBattingPlayers->where('id', '!=', $state['striker_id'])->first()?->id;
-        }
         if (empty($state['bowler_id']) && $bowlingPlayers->isNotEmpty()) {
             $state['bowler_id'] = $bowlingPlayers->first()->id;
         }
@@ -673,6 +658,7 @@ class MatchController extends Controller
                 $tmp = $state['striker_id'];
                 $state['striker_id'] = $state['non_striker_id'];
                 $state['non_striker_id'] = $tmp;
+                $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
             }
         } 
         // Wide or No Ball (Extras)
@@ -749,25 +735,12 @@ class MatchController extends Controller
 
             // Next batsman: if not specified, automatically find next available batsman in order
             $nextId = $request->input('next_batsman_id');
-            if (empty($nextId)) {
-                $battingSquad = $score->inning_number == 1 ? $match->team1Players : $match->team2Players;
-                $nextBatter = $battingSquad->filter(function ($p) use ($striker, $state) {
-                    if ($striker && $p->id == $striker->id) return false;
-                    if (!empty($state['non_striker_id']) && $p->id == $state['non_striker_id']) return false;
-                    $d = strtolower(trim((string)$p->dismissal));
-                    return empty($d) || $d === 'not out';
-                })->first();
-
-                $nextId = $nextBatter?->id;
-            }
-
             if ($nextId) {
                 $state['striker_id'] = (int) $nextId;
             } else {
-                // No more batsmen available (All Out / Inning Complete)
                 $state['striker_id'] = null;
-                $state['all_out'] = true;
             }
+            $this->ensureActiveBatsmenValid($state, $match, $score->inning_number);
         }
 
         // Add to this_over delivery chips
@@ -786,6 +759,7 @@ class MatchController extends Controller
                 $state['striker_id'] = $state['non_striker_id'];
                 $state['non_striker_id'] = $tmp;
                 $state['needs_new_bowler'] = true;
+                $this->ensureActiveBatsmenValid($state, $match, $battingTeamNumber);
             }
         }
 
@@ -796,6 +770,46 @@ class MatchController extends Controller
             $isWicket ? 'WICKET! ☝️' : ($runsScored == 6 ? 'SIX! 💥' : ($runsScored == 4 ? 'FOUR! 🏏' : 'Ball recorded! ⚡')),
             ['over_completed' => $overCompleted, 'wicket' => $isWicket]
         );
+    }
+
+    protected function ensureActiveBatsmenValid(array &$state, CricketMatch $match, int $battingTeamNumber): void
+    {
+        $battingPlayers = $match->players()->where('team_number', $battingTeamNumber)->get();
+
+        $isPlayerOut = function(?int $playerId) use ($battingPlayers) {
+            if (!$playerId) return true;
+            $p = $battingPlayers->firstWhere('id', $playerId);
+            if (!$p) return true;
+            $d = strtolower(trim((string)$p->dismissal));
+            return !empty($d) && $d !== 'not out';
+        };
+
+        $availableNotOut = function(array $excludeIds = []) use ($battingPlayers) {
+            return $battingPlayers->filter(function($p) use ($excludeIds) {
+                if (in_array($p->id, $excludeIds)) return false;
+                $d = strtolower(trim((string)$p->dismissal));
+                return empty($d) || $d === 'not out';
+            });
+        };
+
+        // If striker is missing or already OUT, replace with next available not-out batsman
+        if ($isPlayerOut($state['striker_id'] ?? null)) {
+            $exclude = array_filter([$state['non_striker_id'] ?? null]);
+            $next = $availableNotOut($exclude)->first();
+            $state['striker_id'] = $next?->id ?? null;
+        }
+
+        // If non-striker is missing, already OUT, or duplicate of striker, replace
+        if ($isPlayerOut($state['non_striker_id'] ?? null) || (!empty($state['non_striker_id']) && $state['non_striker_id'] === ($state['striker_id'] ?? null))) {
+            $exclude = array_filter([$state['striker_id'] ?? null]);
+            $next = $availableNotOut($exclude)->first();
+            $state['non_striker_id'] = $next?->id ?? null;
+        }
+
+        // Check if both are empty (team is all out)
+        if (empty($state['striker_id']) && empty($state['non_striker_id'])) {
+            $state['all_out'] = true;
+        }
     }
 
     protected function incrementOversString(?string $overs): string

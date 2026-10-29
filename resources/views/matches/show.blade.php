@@ -46,16 +46,30 @@
     $activeBowlingTeam = $activeInningNum == 1 ? $match->team2_name : $match->team1_name;
     $currentScoreObj = $activeInningNum == 1 ? $score1 : $score2;
 
-    $currentStrikerId = $state['striker_id'] ?? ($striker?->id ?? null);
-    $currentNonStrikerId = $state['non_striker_id'] ?? ($nonStriker?->id ?? null);
     $battingSquad = $activeInningNum == 1 ? $match->team1Players : $match->team2Players;
 
+    $isPlayerOut = function($p) {
+        if (!$p) return true;
+        $d = strtolower(trim((string)$p->dismissal));
+        return !empty($d) && $d !== 'not out';
+    };
+
+    // Ensure striker and non-striker are never dismissed players
+    if ($isPlayerOut($striker)) {
+        $striker = $battingSquad->first(fn($p) => !$isPlayerOut($p) && $p->id !== ($nonStriker?->id ?? null));
+    }
+    if ($isPlayerOut($nonStriker) || ($nonStriker && $striker && $nonStriker->id === $striker->id)) {
+        $nonStriker = $battingSquad->first(fn($p) => !$isPlayerOut($p) && $p->id !== ($striker?->id ?? null));
+    }
+
+    $currentStrikerId = $striker?->id;
+    $currentNonStrikerId = $nonStriker?->id;
+
     // Filter available next batsmen: exclude currently batting striker & non-striker, and exclude already dismissed players
-    $availableNextBatsmen = $battingSquad->filter(function ($pl) use ($currentStrikerId, $currentNonStrikerId) {
+    $availableNextBatsmen = $battingSquad->filter(function ($pl) use ($currentStrikerId, $currentNonStrikerId, $isPlayerOut) {
         if ($currentStrikerId && $pl->id == $currentStrikerId) return false;
         if ($currentNonStrikerId && $pl->id == $currentNonStrikerId) return false;
-        $d = strtolower(trim((string)$pl->dismissal));
-        return empty($d) || $d === 'not out';
+        return !$isPlayerOut($pl);
     })->values();
 
     $defaultNextBatterId = $availableNextBatsmen->first()?->id ?? '';
